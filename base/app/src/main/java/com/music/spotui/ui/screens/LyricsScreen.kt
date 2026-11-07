@@ -77,6 +77,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
 import com.music.spotui.data.entity.LyricWord
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.drawscope.clipPath
@@ -307,12 +312,32 @@ private fun LyricLineText(
     onHold: (() -> Unit)? = null,
     /** Picked to be shared: the line sits on a soft pill. */
     selected: Boolean = false,
+    /**
+     * Rows between this line and the current one. 0 or more switches on the Apple Music look
+     * (current line bright and full size, the others dim, smaller and blurred by distance);
+     * -1 keeps the original look.
+     */
+    distance: Int = -1,
 ) {
-    val target = when (state) {
-        1 -> palette.text
+    val apple = distance >= 0
+    val target = when {
+        apple -> palette.highlight.copy(alpha = if (state == 0) 1f else 0.4f)
+        state == 1 -> palette.text
         else -> palette.highlight
     }
-    val color by animateColorAsState(target, tween(220), label = "lyricColor")
+    val color by animateColorAsState(target, tween(if (apple) 350 else 220), label = "lyricColor")
+    // Apple Music look: the current line is full size, the rest a little smaller and softer
+    // the further they are from it. The spring settles without bouncing.
+    val scale by animateFloatAsState(
+        if (!apple || state == 0) 1f else 0.9f,
+        spring(dampingRatio = 0.85f, stiffness = 180f),
+        label = "lyricScale",
+    )
+    val blurRadius by animateDpAsState(
+        if (!apple || state == 0) 0.dp else (distance.coerceIn(1, 4) * 1.5f).dp,
+        tween(400),
+        label = "lyricBlur",
+    )
     // Explained by Genius: a light dotted line under each row of the text.
     var layout by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
     var pressAt by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
@@ -323,6 +348,16 @@ private fun LyricLineText(
     val align = if (duet && line.voice == 2) TextAlign.End else TextAlign.Start
     val lineModifier = modifier
         .fillMaxWidth()
+        .then(
+            if (apple) Modifier
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    transformOrigin = TransformOrigin(if (duet && line.voice == 2) 1f else 0f, 0.5f)
+                }
+                .blur(blurRadius, BlurredEdgeTreatment.Unbounded)
+            else Modifier
+        )
         .drawBehind {
             if (picked > 0f) drawRoundRect(
                 palette.highlight.copy(alpha = 0.2f * picked),
@@ -363,7 +398,7 @@ private fun LyricLineText(
                 Text(
                     text = shown,
                     // The words to come keep the colour of the lines to come; sung, they turn white.
-                    color = palette.text,
+                    color = if (apple) palette.highlight.copy(alpha = 0.4f) else palette.text,
                     fontSize = fontSize,
                     lineHeight = fontSize * 1.25f,
                     fontWeight = FontWeight.Bold,
@@ -624,7 +659,7 @@ fun LyricsScreen(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(24.dp, 8.dp, 24.dp, 48.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(22.dp),
                     ) {
                         if (notes.isNotEmpty() && !hintSeen) item(key = "genius-hint") {
                             Text(
@@ -646,7 +681,8 @@ fun LyricsScreen(
                                 line = line,
                                 state = lineState(l, i, active),
                                 palette = palette,
-                                fontSize = 24.sp,
+                                fontSize = 30.sp,
+                                distance = if (l.synced) kotlin.math.abs(i - active) else -1,
                                 position = position,
                                 translation = if (state.showTranslation) state.translations?.getOrNull(i) else null,
                                 romanization = if (romanizing) line.romanization?.trim()?.takeIf { it.isNotEmpty() && !it.equals(line.text.trim(), ignoreCase = true) } else null,
